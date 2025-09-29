@@ -1,8 +1,15 @@
+Got it, Francisco — here’s your updated `README.md` in full Markdown format, just like before, with all the new functionality and examples included. You can copy and paste this directly into your `README.md` file:
+
+---
+
+```markdown
 # 🎬 Video Transcoder API
 
-Sistema distribuido de transcodificación de vídeo con cola de procesamiento, métricas Prometheus y orquestación con Docker Compose.
+A distributed video transcoding system built with FastAPI, Redis, RQ, and Prometheus. Supports asynchronous job queuing and inline transcoding for small files, with full Docker orchestration.
 
-## 🧱 Estructura del proyecto
+---
+
+## 🧱 Project Structure
 
 ```
 video-transcoder/
@@ -16,183 +23,61 @@ video-transcoder/
 └── videos/
 ```
 
-## 🚀 Descripción de componentes
+---
 
-- **FastAPI**: expone la API REST para subir vídeos y consultar estado.
-- **Redis + RQ**: gestiona la cola de trabajos de transcodificación.
-- **FFmpeg**: realiza la transcodificación.
-- **Prometheus**: recolecta métricas de la API.
-- **Docker Compose**: orquesta todos los servicios.
+## 🚀 Components
 
-## 📦 Dependencias (`requirements.txt`)
+- **FastAPI**: REST API for uploading videos and checking job status.
+- **Redis + RQ**: Job queue for asynchronous transcoding.
+- **FFmpeg**: Performs the actual video transcoding.
+- **Prometheus**: Collects metrics from the API.
+- **Docker Compose**: Orchestrates all services.
 
-```
-fastapi
-uvicorn
-rq
-redis
-prometheus_fastapi_instrumentator
-```
+---
 
-## 🐍 Código fuente
+## ⚙️ API Endpoints
 
-### `tasks.py`
+### `POST /transcode`
 
-```python
-import subprocess
+Uploads a video and either:
 
-def transcode(input_path, output_path, codec, bitrate, resolution):
-    command = [
-        "ffmpeg", "-y", "-i", input_path,
-        "-c:v", codec, "-b:v", bitrate, "-s", resolution,
-        output_path
-    ]
-    subprocess.run(command)
-    return output_path
-```
+- Returns the transcoded result immediately (if `inline=true` and the file is small), or
+- Enqueues a transcoding job and returns a `job_id`.
 
-### `app.py`
+**Form fields:**
 
-```python
-from fastapi import FastAPI, File, UploadFile, Form
-from redis import Redis
-from rq import Queue
-from rq.job import Job
-from tasks import transcode
-from prometheus_fastapi_instrumentator import Instrumentator
-import time
+- `file`: video file to transcode
+- `codec`: video codec (default: `libx264`)
+- `bitrate`: target bitrate (default: `1000k`)
+- `resolution`: target resolution (default: `1280x720`)
+- `inline`: optional boolean (`true` or `false`)
 
-app = FastAPI()
-Instrumentator().instrument(app).expose(app)
+---
 
-def connect_redis():
-    for _ in range(10):
-        try:
-            redis_conn = Redis(host="redis", port=6379)
-            redis_conn.ping()
-            return redis_conn
-        except:
-            print("Redis not ready, retrying...")
-            time.sleep(2)
-    raise Exception("Redis connection failed")
+### `GET /status/{job_id}`
 
-redis_conn = connect_redis()
-q = Queue(connection=redis_conn)
+Returns the status of a transcoding job. If the job is finished and the output file exists, includes a `download_url` field.
 
-@app.post("/transcode")
-async def enqueue_transcoding(
-    file: UploadFile = File(...),
-    codec: str = Form("libx264"),
-    bitrate: str = Form("1000k"),
-    resolution: str = Form("1280x720")
-):
-    input_path = f"videos/{file.filename}"
-    output_path = f"videos/output_{file.filename}"
+**Example response:**
 
-    with open(input_path, "wb") as f:
-        f.write(await file.read())
-
-    job = q.enqueue(transcode, input_path, output_path, codec, bitrate, resolution)
-    return {"job_id": job.get_id(), "status": job.get_status()}
-
-@app.get("/status/{job_id}")
-def get_status(job_id: str):
-    job = Job.fetch(job_id, connection=redis_conn)
-    return {"status": job.get_status()}
+```json
+{
+  "status": "finished",
+  "download_url": "http://localhost:8000/download/{job_id}"
+}
 ```
 
-### `worker.py`
+---
 
-```python
-from redis import Redis
-from rq import Worker
+### `GET /download/{job_id}`
 
-redis_conn = Redis(host="redis", port=6379)
+Downloads the transcoded video file if the job is finished and the result exists.
 
-worker = Worker(queues=["default"], connection=redis_conn)
-worker.work()
-```
+---
 
-## 🐳 Docker
+## 🧪 Usage Examples
 
-### `Dockerfile`
-
-```Dockerfile
-FROM python:3.10-slim
-
-RUN apt-get update && apt-get install -y ffmpeg
-
-WORKDIR /app
-COPY . /app
-
-RUN pip install --no-cache-dir -r requirements.txt
-
-EXPOSE 8000
-```
-
-### `prometheus.yml`
-
-```yaml
-global:
-  scrape_interval: 5s
-
-scrape_configs:
-  - job_name: 'video-transcoder'
-    static_configs:
-      - targets: ['api:8000']
-```
-
-### `docker-compose.yml`
-
-```yaml
-version: '3.8'
-
-services:
-  api:
-    build: .
-    container_name: api
-    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./videos:/app/videos
-    depends_on:
-      - redis
-
-  worker:
-    build: .
-    container_name: worker
-    command: ["python", "worker.py"]
-    volumes:
-      - ./videos:/app/videos
-    depends_on:
-      - redis
-
-  redis:
-    image: redis:7
-    container_name: redis
-    ports:
-      - "6379:6379"
-
-  prometheus:
-    image: prom/prometheus
-    container_name: prometheus
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    ports:
-      - "9090:9090"
-```
-
-## ▶️ Ejecución
-
-```bash
-docker-compose down -v
-docker-compose up --build
-```
-
-## 🧪 Pruebas
-
-### Enviar vídeo:
+### 1. Standard transcoding (asynchronous)
 
 ```bash
 curl -X POST http://localhost:8000/transcode \
@@ -202,36 +87,55 @@ curl -X POST http://localhost:8000/transcode \
   -F "resolution=1280x720"
 ```
 
-### Consultar estado:
+Then check status:
 
 ```bash
-curl http://localhost:8000/status/<job_id>
+curl http://localhost:8000/status/{job_id}
 ```
 
-### Ver métricas:
+And download when ready:
 
-Accede a [http://localhost:9090](http://localhost:9090)
-
-## 📈 Próximos pasos
-
-- Añadir Grafana para dashboards
-- Escalar workers horizontalmente
-- Añadir autenticación a la API
-- Desplegar en Kubernetes o en la nube
-EOF
+```bash
+curl http://localhost:8000/download/{job_id} --output result.mp4
 ```
-
-Este comando crea el archivo completo con todos los bloques de código correctamente formateados.
 
 ---
 
-## 📁 Opción 2: Pegar en VS Code sin perder formato
+### 2. Inline transcoding (for small videos)
 
-1. Abre VS Code.
-2. Crea un nuevo archivo llamado `README.md`.
-3. Pega el contenido que te di antes, incluyendo todos los bloques de código.
-4. VS Code reconocerá automáticamente el formato Markdown y te mostrará una vista previa si pulsas `Ctrl+Shift+V`.
+```bash
+curl -X POST http://localhost:8000/transcode \
+  -F "file=@small_video.mp4" \
+  -F "codec=libx264" \
+  -F "bitrate=800k" \
+  -F "resolution=640x360" \
+  -F "inline=true" --output result_inline.mp4
+```
 
 ---
 
-¿Quieres que te ayude a añadir una sección de “Contribución” o “Licencia” para dejarlo listo como proyecto público? También puedo ayudarte a generar una versión en inglés si lo vas a compartir internacionalmente.
+### 3. Inline requested but file too large (fallback to queue)
+
+```bash
+curl -X POST http://localhost:8000/transcode \
+  -F "file=@large_video.mp4" \
+  -F "codec=libx264" \
+  -F "bitrate=2000k" \
+  -F "resolution=1920x1080" \
+  -F "inline=true"
+```
+
+Response will include `job_id` and status.
+
+---
+
+## 📈 Metrics
+
+Prometheus metrics are exposed at `/metrics` and include:
+
+- Total HTTP requests
+- Request durations
+- In-progress requests
+
+Access Prometheus at [http://localhost:9090](http://localhost:9090)
+
