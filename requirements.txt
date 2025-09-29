@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+python-multipart
+rq
+redis
+prometheus_fastapi_instrumentator
